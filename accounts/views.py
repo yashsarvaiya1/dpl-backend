@@ -18,6 +18,9 @@ from .serializers import (
 )
 from .permissions import IsSuperUser, IsAdminOrSuperUser
 from django.db import transaction as db_transaction
+from django.db.models import Sum, Count, Q
+from django.utils.timezone import now
+from datetime import timedelta
 
 
 class AuthViewSet(viewsets.ViewSet):
@@ -258,3 +261,101 @@ class UserViewSet(viewsets.ModelViewSet):
             )
 
         return Response({"detail": f"{amount} tickets removed.", "tickets": user.tickets})
+
+    @action(detail=False, methods=['get'], url_path='dashboard', permission_classes=[IsAdminOrSuperUser])
+    def dashboard(self, request):
+        from bmatches.models import BMatch, BRoom, TicketTransaction
+        from bmatches.serializers import BMatchSerializer
+        from django.db.models.functions import TruncDate
+        from django.db.models import Value, IntegerField
+        from django.db.models.functions import Coalesce
+
+        today = now()
+        month_start = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        week_ago = today - timedelta(days=7)
+
+        # ── Users ──────────────────────────────────────────────
+        user_stats = User.objects.aggregate(
+            total=Count('id'),
+            active=Count('id', filter=Q(is_active=True)),
+            new_this_month=Count('id', filter=Q(created_at__gte=month_start)),
+        )
+
+        # ── BMatches (use all_objects to avoid soft-delete manager issues) ──
+        bmatch_stats = BMatch.objects.aggregate(
+            total=Count('id'),
+            active=Count('id', filter=Q(status='active')),
+            upcoming=Count('id', filter=Q(status='upcoming')),
+            closed=Count('id', filter=Q(status='closed')),
+            completed=Count('id', filter=Q(status='completed')),
+            cancelled=Count('id', filter=Q(status='cancelled')),
+        )
+
+        # ── Rooms ──────────────────────────────────────────────
+        room_stats = BRoom.objects.aggregate(
+            total=Count('id'),
+            active=Count('id', filter=Q(status='active')),
+            ongoing=Count('id', filter=Q(status='ongoing')),
+            completed=Count('id', filter=Q(status='completed')),
+            cancelled=Count('id', filter=Q(status='cancelled')),
+        )
+
+        # ── Tickets ────────────────────────────────────────────
+        # Coalesce handles NULL from Sum when no rows exist
+        ticket_stats = TicketTransaction.objects.aggregate(
+            total_credited=Coalesce(
+                Sum('amount', filter=Q(transaction_type='credit')),
+                0, output_field=IntegerField()
+            ),
+            total_debited=Coalesce(
+                Sum('amount', filter=Q(transaction_type='debit')),
+                0, output_field=IntegerField()
+            ),
+        )
+
+        # Sum of tickets across all active users — Coalesce handles NULL
+        total_in_circulation = User.objects.aggregate(
+            total=Coalesce(Sum('tickets'), 0, output_field=IntegerField())
+        )['total']
+
+        # ── Transactions last 7 days (chart data) ──────────────
+        tx_last_7_days = (
+            TicketTransaction.objects
+            .filter(created_at__gte=week_ago)
+            .annotate(day=TruncDate('created_at'))
+            .values('day', 'transaction_type')
+            .annotate(total=Coalesce(Sum('amount'), 0, output_field=IntegerField()))
+            .order_by('day')
+        )
+
+        chart_map: dict = {}
+        for row in tx_last_7_days:
+            day_str = str(row['day'])
+            if day_str not in chart_map:
+                chart_map[day_str] = {'date': day_str, 'credit': 0, 'debit': 0}
+            chart_map[day_str][row['transaction_type']] = row['total']
+
+        chart_data = []
+        for i in range(7):
+            day = (week_ago + timedelta(days=i + 1)).strftime('%Y-%m-%d')
+            chart_data.append(chart_map.get(day, {'date': day, 'credit': 0, 'debit': 0}))
+
+        # ── Recent BMatches ────────────────────────────────────
+        recent_bmatches = BMatch.objects.select_related(
+            'match__team_1', 'match__team_2'
+        ).order_by('-created_at')[:5]
+
+        return Response({
+            'users': user_stats,
+            'bmatches': bmatch_stats,
+            'rooms': room_stats,
+            'tickets': {
+                'total_in_circulation': total_in_circulation,
+                'total_credited': ticket_stats['total_credited'],
+                'total_debited': ticket_stats['total_debited'],
+            },
+            'chart': chart_data,
+            'recent_bmatches': BMatchSerializer(
+                recent_bmatches, many=True, context={'request': request}
+            ).data,
+        })

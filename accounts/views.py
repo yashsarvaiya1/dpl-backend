@@ -9,7 +9,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
-
+from bmatches.models import TicketTransaction
 from .models import User
 from .serializers import (
     UserSerializer, CreateUserSerializer,
@@ -17,6 +17,7 @@ from .serializers import (
     SetPasswordSerializer, LogoutSerializer,
 )
 from .permissions import IsSuperUser, IsAdminOrSuperUser
+from django.db import transaction as db_transaction
 
 
 class AuthViewSet(viewsets.ViewSet):
@@ -202,3 +203,58 @@ class UserViewSet(viewsets.ModelViewSet):
         instance.is_active = True
         instance.save(update_fields=['is_active'])
         return Response({'detail': 'User activated successfully.'})
+
+    @action(detail=True, methods=['post'], url_path='add-tickets')
+    def add_tickets(self, request, pk=None):
+        user = self.get_object()
+        amount = request.data.get('amount')
+
+        if not amount or int(amount) <= 0:
+            return Response(
+                {"detail": "Amount must be a positive integer."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        amount = int(amount)
+
+        with db_transaction.atomic():
+            user.tickets = (user.tickets or 0) + amount
+            user.save(update_fields=['tickets'])
+
+            TicketTransaction.objects.create(
+                user=user,
+                transaction_type='credit',
+                amount=amount,
+                reason='admin_add',
+                created_by=request.user
+            )
+
+        return Response({"detail": f"{amount} tickets added.", "tickets": user.tickets})
+
+
+    @action(detail=True, methods=['post'], url_path='remove-tickets')
+    def remove_tickets(self, request, pk=None):
+        user = self.get_object()
+        amount = request.data.get('amount')
+
+        if not amount or int(amount) <= 0:
+            return Response(
+                {"detail": "Amount must be a positive integer."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        amount = int(amount)
+
+        with db_transaction.atomic():
+            user.tickets = max((user.tickets or 0) - amount, 0)
+            user.save(update_fields=['tickets'])
+
+            TicketTransaction.objects.create(
+                user=user,
+                transaction_type='debit',
+                amount=amount,
+                reason='admin_remove',
+                created_by=request.user
+            )
+
+        return Response({"detail": f"{amount} tickets removed.", "tickets": user.tickets})

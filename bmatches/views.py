@@ -27,9 +27,14 @@ from matches.models import MatchPosition
 class BMatchViewSet(viewsets.ModelViewSet):
     serializer_class = BMatchSerializer
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
-    filterset_fields = ['status', 'match', 'created_by']
+    filterset_fields = {
+        'status': ['exact'],
+        'match': ['exact'],
+        'created_by': ['exact'],
+        'match__date': ['exact', 'gte', 'lte'],   # ← date filter on the match
+    }
     search_fields = ['note', 'match__team_1__name', 'match__team_2__name']
-    ordering_fields = ['created_at', 'ticket_amount']
+    ordering_fields = ['created_at', 'ticket_amount', 'match__date']
     ordering = ['-created_at']
 
     def get_queryset(self):
@@ -254,23 +259,9 @@ class TicketTransactionViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         """
-        Admin manually adds or removes tickets.
+        Creates a transaction record only.
+        Ticket balance is managed exclusively by
+        add-tickets / remove-tickets actions on UserViewSet.
+        This endpoint is for superadmin manual record injection only.
         """
-        with db_transaction.atomic():
-            transaction_type = serializer.validated_data.get('transaction_type')
-            amount = serializer.validated_data.get('amount', 0)
-            target_user = serializer.validated_data.get('user')
-
-            instance = serializer.save(
-                created_by=self.request.user,
-                reason=TicketTransaction.REASON_ADMIN_ADD
-                if transaction_type == TicketTransaction.TYPE_CREDIT
-                else TicketTransaction.REASON_ADMIN_REMOVE
-            )
-
-            if transaction_type == TicketTransaction.TYPE_CREDIT:
-                target_user.tickets = (target_user.tickets or 0) + amount
-            else:
-                target_user.tickets = max((target_user.tickets or 0) - amount, 0)
-
-            target_user.save(update_fields=['tickets'])
+        serializer.save(created_by=self.request.user)

@@ -1,12 +1,12 @@
 # accounts/serializers.py
 
 from rest_framework import serializers
-from django.contrib.auth import authenticate
 from .models import User
 
 
 class UserSerializer(serializers.ModelSerializer):
     has_password_set = serializers.SerializerMethodField()
+    tickets = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -15,10 +15,13 @@ class UserSerializer(serializers.ModelSerializer):
             'is_staff', 'is_superuser', 'is_active',
             'has_password_set', 'created_at', 'updated_at',
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at', 'has_password_set']
+        read_only_fields = ['id', 'created_at', 'updated_at', 'has_password_set', 'tickets']
 
-    def get_has_password_set(self, obj):
+    def get_has_password_set(self, obj) -> bool:
         return obj.has_password_set()
+
+    def get_tickets(self, obj) -> int:
+        return obj.tickets or 0  # always int, never null
 
 
 class CreateUserSerializer(serializers.ModelSerializer):
@@ -49,12 +52,12 @@ class CheckMobileSerializer(serializers.Serializer):
 
 class LoginSerializer(serializers.Serializer):
     mobile_number = serializers.CharField(max_length=15)
-    password      = serializers.CharField(write_only=True)
+    password = serializers.CharField(write_only=True)
 
 
 class SetPasswordSerializer(serializers.Serializer):
-    mobile_number    = serializers.CharField(max_length=15)
-    password         = serializers.CharField(write_only=True, min_length=6)
+    mobile_number = serializers.CharField(max_length=15)
+    password = serializers.CharField(write_only=True, min_length=6)
     confirm_password = serializers.CharField(write_only=True, min_length=6)
 
     def validate(self, attrs):

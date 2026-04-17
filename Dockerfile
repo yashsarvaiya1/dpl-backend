@@ -2,15 +2,13 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy project
 COPY . .
 
-# Collect static files at build time
-RUN python manage.py collectstatic --noinput || true
+# Use a dummy key just for collectstatic at build time
+RUN SECRET_KEY=dummy-build-key python manage.py collectstatic --noinput
 
 EXPOSE 8000
 

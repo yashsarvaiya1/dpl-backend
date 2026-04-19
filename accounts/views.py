@@ -111,9 +111,6 @@ class AuthViewSet(viewsets.ViewSet):
 
 
 class UserViewSet(viewsets.ModelViewSet):
-    """
-    Handles: CRUD for users + clear-password + deactivate
-    """
     queryset = User.objects.all()
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_fields = ['is_staff', 'is_active', 'is_superuser']
@@ -122,13 +119,29 @@ class UserViewSet(viewsets.ModelViewSet):
     ordering = ['-created_at']
 
     def get_permissions(self):
-        if self.action in ['list', 'retrieve']:
-            return [IsAdminOrSuperUser()]
-        if self.action == 'create':
-            return [IsAdminOrSuperUser()]
-        if self.action in ['update', 'partial_update', 'destroy', 'clear_password', 'deactivate']:
+        # Any authenticated user can fetch their own profile
+        if self.action == 'retrieve':
+            return [IsAuthenticated()]
+        # All other read/write requires admin
+        if self.action in [
+            'list', 'create', 'update', 'partial_update', 'destroy',
+            'clear_password', 'deactivate', 'activate',
+            'add_tickets', 'remove_tickets', 'dashboard',
+        ]:
             return [IsAdminOrSuperUser()]
         return [IsAuthenticated()]
+
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        # Normal users can ONLY fetch their own profile
+        if not request.user.is_staff and not request.user.is_superuser:
+            if instance.id != request.user.id:
+                return Response(
+                    {'detail': 'You can only view your own profile.'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)
 
     def get_serializer_class(self):
         if self.action == 'create':
